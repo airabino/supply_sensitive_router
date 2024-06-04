@@ -8,6 +8,7 @@ from scipy.special import factorial
 from .progress_bar import ProgressBar
 from .dijkstra import dijkstra, multi_directional_dijkstra
 from .bellman import bellman
+from .queuing import queuing_time_distribution
 
 def in_range(x, lower, upper):
 
@@ -300,7 +301,17 @@ def supply_costs(graph, vehicle, station_kw):
 
         if node['type'] in station_kw:
 
-            node['station'] = Station(**station_kw[node['type']])
+            kw = station_kw[node['type']]
+
+            if 'queue' in kw:
+
+                kw['queue']['n'] = node.get('n_dcfc', 1)
+
+                node['station'] = SimulatedStation(**kw)
+
+            else:
+
+                node['station'] = Station(**kw)
 
     for source, adj in graph._adj.items():
         for target, edge in adj.items():
@@ -310,6 +321,23 @@ def supply_costs(graph, vehicle, station_kw):
             if station is not None:
 
                 edge = station.update(vehicle, edge)
+
+    return graph
+
+def origins_destinations(graph, origins, destinations):
+
+    for source, adj in graph._adj.items():
+        for target, edge in adj.items():
+
+            # Edges from a non-origin destination are disallowed
+            if (source in destinations) and (source not in origins):
+
+                edge['feasible'] = False
+
+            # Edges to and origin are disallowed
+            if target in origins:
+
+                edge['feasible'] = False
 
     return graph
 
@@ -457,18 +485,68 @@ class Station():
         self.setup_time = kwargs.get('setup_time', lambda rng: 0)(self.rng) # [s]
 
         self.delay_time = np.zeros(self.cases) + self.queue_time + self.setup_time
+        
+        self.risk_attitude = None
+        self.delay_time_expected = None
+
 
     def expect(self, vehicle):
 
-        self.delay_time = super_quantile(self.delay_time, vehicle.risk_attitude)
+        if self.risk_attitude != vehicle.risk_attitude:
+
+            self.risk_attitude = vehicle.risk_attitude
+
+            self.delay_time_expected = super_quantile(self.delay_time, self.risk_attitude)
 
     def update(self, vehicle, edge):
 
         feasible, charge_energy, charge_duration = vehicle.energy(self, edge)
 
+        if vehicle.cases == 1:
+
+            self.expect(vehicle)
+
+            delay_time = self.delay_time_expected
+
+        else:
+
+            delay_time = self.delay_time
+
+        if self.charge_rate == np.inf:
+
+            charge_duration = 0
+            delay_time = 0
+
         edge['feasible'] = feasible
         edge['energy'] = charge_energy
         edge['charge_time'] = charge_duration
-        edge['total_time'] = edge['time'] + self.delay_time + charge_duration
+        edge['total_time'] = edge['time'] + delay_time + charge_duration
 
         return edge
+
+class SimulatedStation(Station):
+
+    def __init__(self, **kwargs):
+
+        self.seed = kwargs.get('seed', None)
+        self.rng = kwargs.get('rng', np.random.default_rng(self.seed))
+
+        self.cases = kwargs.get('cases', 1) # [-]
+
+        # Parameters for charge events
+        self.charge_rate = kwargs.get('charge_rate', lambda rng: 400e3)(self.rng)
+        self.charge_price = kwargs.get('charge_price', lambda rng: .5 / 3.6e6)(self.rng) # [$/J]
+
+        self.compute_queue_times(kwargs.get('queue', {}))
+        self.setup_time = kwargs.get('setup_time', lambda rng: 0)(self.rng) # [s]
+
+        self.delay_time = np.zeros(self.cases) + self.queue_time + self.setup_time
+        
+        self.risk_attitude = None
+        self.delay_time_expected = None
+
+    def compute_queue_times(self, kwargs):
+
+        self.qtd = queuing_time_distribution(**kwargs)
+
+        self.queue_time = self.qtd.rvs(size = self.cases, random_state = self.rng)

@@ -3,6 +3,7 @@ import numpy as np
 
 from heapq import heappop, heappush
 from itertools import count
+from scipy.stats import rv_histogram
 
 class Server():
 
@@ -44,13 +45,29 @@ class Demand():
 
 		self.rng = kwargs.get('rng', np.random.default_rng())
 
-		self.spawn_criteria = kwargs.get('spawn_criteria', lambda rng: True) 
+		self.max_length = kwargs.get('max_length', np.inf)
+
+		self.inter_arrival = kwargs.get('inter_arrival', lambda rng: rng.exponential(1))
+
+		self.interval = self.inter_arrival(self.rng)
 
 		self.capacity = kwargs.get('capacity', lambda rng: 1) # [u]
-		
-	def spawn(self):
 
-		if self.spawn_criteria(self.rng):
+		self.initial = kwargs.get('initial', 0)
+
+		self.initial_customers = (
+			[Customer(capacity = self.capacity(self.rng)) for idx in range(self.initial)]
+			)
+		
+	def spawn(self, step):
+
+
+		self.interval -= step
+		# print(self.interval)
+
+		if self.interval <= 0:
+
+			self.interval = self.inter_arrival(self.rng)
 
 			return Customer(capacity = self.capacity(self.rng))
 
@@ -99,6 +116,10 @@ class System():
 		queue = []
 		served = []
 
+		for customer in self.demand.initial_customers:
+
+			heappush(queue, (next(counter), customer))
+
 		in_queue = 0
 		in_service = 0
 		in_served = 0
@@ -117,9 +138,9 @@ class System():
 				customer[1].step(step)
 
 			# Creating new customers
-			customer = self.demand.spawn()
+			customer = self.demand.spawn(step)
 
-			if customer is not None:
+			if (customer is not None) and (len(queue) <= self.demand.max_length - 1):
 
 				heappush(queue, (next(counter), customer))
 
@@ -159,5 +180,17 @@ class System():
 
 		return queue, served, status
 
+def queuing_time_distribution(**kwargs):
 
+	servers = [Server(**kwargs.get('server', {})) for idx in range(kwargs.get('n', 1))]
+
+	demand = Demand(**kwargs.get('demand', {}))
+
+	system = System(servers, demand)
+
+	_, served, _ = system.simulate(**kwargs.get('simulation', {}))
+
+	queue_steps = np.array([customer.steps - customer.steps_service for customer in served])
+
+	return rv_histogram(np.histogram(queue_steps, **kwargs.get('histogram', {})))
 
