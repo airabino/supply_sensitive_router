@@ -5,10 +5,9 @@ from .utilities import full_factorial
 
 default_vehicle_param = {
     'capacity': lambda rng: (rng.random() * 80 + 40) * 3.6e6,
-    'charge_rate': lambda rng: (rng.random() * 150 + 50) * 1e3,
+    'power': lambda rng: (rng.random() * 150 + 50) * 1e3,
     'risk_attitude': lambda rng: (rng.random() * .8 + .1) + np.array([-.1, .1]),
     'cases': lambda rng: 1,
-    'charge_target_soc': lambda rng: .8,
     'soc_bounds': lambda rng: (.1, 1),
     'efficiency': lambda rng: 550,
 }
