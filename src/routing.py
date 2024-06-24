@@ -10,6 +10,14 @@ from .dijkstra import dijkstra, multi_directional_dijkstra
 from .bellman import bellman
 from .queuing import queuing_time_distribution
 
+_network_power = {
+    'Tesla': [250e3],
+    'Electrify America': [150e3],
+    'ChargePoint Network': [62.5e3],
+    'eVgo Network': [50e3, 100e3, 350e3],
+    'default': [50e3],
+}
+
 def in_range(x, lower, upper):
 
     return (x >= lower) & (x <= upper)
@@ -21,6 +29,23 @@ def super_quantile(x, p = (0, 1), n = 100):
     q_k = np.quantile(x, p_k)
 
     return np.nan_to_num(q_k.mean(), nan = np.inf)
+
+def origins_destinations(graph, origins, destinations):
+
+    for source, adj in graph._adj.items():
+        for target, edge in adj.items():
+
+            # Edges from a non-origin destination are disallowed
+            if (source in destinations) and (source not in origins):
+
+                edge['feasible'] = False
+
+            # Edges to and origin are disallowed
+            if target in origins:
+
+                edge['feasible'] = False
+
+    return graph
 
 def shortest_paths(graph, origins, method = 'dijkstra', **kwargs):
     '''
@@ -47,6 +72,10 @@ def shortest_paths(graph, origins, method = 'dijkstra', **kwargs):
     the values argument and a boolean savings.
     '''
 
+    destinations = kwargs.get('destinations', list(graph.nodes))
+
+    # graph = origins_destinations(graph.copy(), origins, destinations)
+
     if method == 'dijkstra':
 
         costs, values, paths = dijkstra(graph, origins, **kwargs)
@@ -55,25 +84,19 @@ def shortest_paths(graph, origins, method = 'dijkstra', **kwargs):
 
         costs, values, paths = bellman(graph, origins, **kwargs)
 
-    destinations = kwargs.get('destinations', [])
-    
-    if destinations:
+    # return costs, values, paths
 
-        costs_d = {}
-        values_d = {}
-        paths_d = {}
+    costs_d = {}
+    values_d = {}
+    paths_d = {}
 
-        for destination in destinations:
+    for destination in np.intersect1d(list(costs.keys()), destinations):
 
-            costs_d[destination] = costs[destination]
-            values_d[destination] = values[destination]
-            paths_d[destination] = paths[destination]
+        costs_d[destination] = costs[destination]
+        values_d[destination] = values[destination]
+        paths_d[destination] = paths[destination]
 
-        return costs_d, values_d, paths_d
-
-    else:
-
-        return costs, values, paths
+    return costs_d, values_d, paths_d
 
 def all_pairs_shortest_paths(graph, origins, method = 'dijkstra', **kwargs):
     '''
@@ -138,9 +161,47 @@ def all_pairs_shortest_paths(graph, origins, method = 'dijkstra', **kwargs):
 
         return costs, values, paths
 
+def gravity(values, origins = {}, destinations = {}, **kwargs):
+
+    field = kwargs.get('field', 'total_time')
+    expectation = kwargs.get('expectation', np.mean)
+    constant = kwargs.get('constant', 1)
+    adjustment = kwargs.get('adjustment', 1)
+
+
+    if not origins:
+
+        origins = {k: 1 for k in values.keys()}
+
+    if not destinations:
+
+        destinations = {k: 1 for k in values.keys()}
+
+    sum_cost = 0
+
+    n = 0
+
+    for origin, mass_o in origins.items():
+
+        for destination, mass_d in destinations.items():
+
+            if origin != destination:
+
+                sum_cost += (
+                    constant * mass_o * mass_d /
+                    (
+                        expectation(
+                            np.atleast_1d(values[origin][destination][field])) / adjustment
+                        ) ** 2
+                    )
+
+            n += 1
+
+    return sum_cost / n
+
 def impedance(values, origins = {}, destinations = {}, **kwargs):
 
-    field = kwargs.get('field', 'time')
+    field = kwargs.get('field', 'total_time')
     expectation = kwargs.get('expectation', np.mean)
     constant = kwargs.get('constant', 1)
 
@@ -170,7 +231,31 @@ def impedance(values, origins = {}, destinations = {}, **kwargs):
 
             n += 1
 
-            # print(sum_cost)
+    return sum_cost / n
+
+def specific_impedance(values, destinations = {}, **kwargs):
+
+    field = kwargs.get('field', 'total_time')
+    expectation = kwargs.get('expectation', np.mean)
+    constant = kwargs.get('constant', 1)
+
+
+    if not destinations:
+
+        destinations = {k: 1 for k in values.keys()}
+
+    sum_cost = 0
+
+    n = -1
+
+    for destination, mass_d in destinations.items():
+
+        sum_cost += (
+            constant * mass_d *
+            expectation(np.atleast_1d(values[destination][field]))
+            )
+
+        n += 1
 
     return sum_cost / n
 
@@ -303,17 +388,10 @@ def supply_costs(graph, vehicle, station_kw):
 
             kw = station_kw[node['type']]
 
-            if 'queue' in kw:
-
-                kw['queue']['n'] = node.get('n_dcfc', 1)
-
-                node['station'] = SimulatedStation(**kw)
-
-            else:
-
-                node['station'] = Station(node, **kw)
+            node['station'] = Station(node, **kw)
 
     for source, adj in graph._adj.items():
+
         for target, edge in adj.items():
 
             station = graph._node[source]['station']
@@ -321,23 +399,6 @@ def supply_costs(graph, vehicle, station_kw):
             if station is not None:
 
                 edge = station.update(vehicle, edge)
-
-    return graph
-
-def origins_destinations(graph, origins, destinations):
-
-    for source, adj in graph._adj.items():
-        for target, edge in adj.items():
-
-            # Edges from a non-origin destination are disallowed
-            if (source in destinations) and (source not in origins):
-
-                edge['feasible'] = False
-
-            # Edges to and origin are disallowed
-            if target in origins:
-
-                edge['feasible'] = False
 
     return graph
 
@@ -359,7 +420,7 @@ class Vehicle():
 
         self.out_of_charge_penalty = kwargs.get('out_of_charge_penalty', 4 * 3600) # [s]
 
-        self.cost = kwargs.get('cost', 'total_time')
+        self.cost = kwargs.get('cost', 'routing_time')
 
         if self.cases == 1:
 
@@ -380,6 +441,8 @@ class Vehicle():
             {
                 'total_time': np.zeros(self.cases), # [s]
                 'driving_time': np.zeros(self.cases), # [s]
+                'charging_time': np.zeros(self.cases), # [s]
+                'routing_time': np.zeros(self.cases), # [s]
                 'distance': np.zeros(self.cases), # [m]
                 'price': np.zeros(self.cases), # [$]
             },
@@ -414,11 +477,13 @@ class Vehicle():
         updated_values = {}
 
         updated_values['total_time'] = values['total_time'] + edge['total_time']
+        updated_values['routing_time'] = values['routing_time'] + edge['routing_time']
         updated_values['driving_time'] = values['driving_time'] + edge['time']
+        updated_values['charging_time'] = values['charging_time'] + edge['charging_time']
         updated_values['distance'] = values['distance'] + edge['distance']
         updated_values['price'] = values['price'] + edge['price']
 
-        return updated_values
+        return updated_values, True
 
     def compare(self, values, approximation):
 
@@ -431,7 +496,7 @@ class Vehicle():
 
     def edge_feasible(self, edge):
 
-        if edge.get('type', '') == 'to_destination':
+        if edge.get('type', '') != 'to_station':
 
             min_edge_distance = 0
 
@@ -529,77 +594,88 @@ class Vehicle():
 
 class Station():
 
-    def __init__(self, node, **kwargs):
+    def __init__(self, node = {}, **kwargs):
 
         self.seed = kwargs.get('seed', None)
         self.rng = kwargs.get('rng', np.random.default_rng(self.seed))
 
-        self.type = kwargs.get('type', 'ac')
+        self.type = kwargs.get('type', 'ac') # {'ac', 'dc'}
+
+        # Private chargers do not generate queues, public ones do
+        self.access = kwargs.get('access', 'private') # {'private', 'public'}
 
         self.cases = kwargs.get('cases', 1) # [-]
 
         # Parameters for charge events
-        self.power = kwargs.get(
-            'power', lambda n, rng: 400e3
-            )(node, self.rng)
+        power_input = kwargs.get('power', np.inf)
 
-        self.price = kwargs.get(
-            'price', lambda n, rng: .5 / 3.6e6
-            )(node, self.rng) # [$/J]
+        if type(power_input) == dict:
 
-        self.reliability = kwargs.get(
-            'reliability', lambda n, rng: 1
-            )(node, self.rng)
+            
+            self.power = self.rng.choice(
+                power_input.get(node.get('network', ''), power_input['default'])
+                )
 
-        self.ports = kwargs.get(
-            'ports', lambda n, rng: n.get('n_dcfc', 1)
-            )(node, self.rng)
+        elif type(power_input) == float:
+
+            self.power = power_input
+
+        self.price = kwargs.get('price', .5 / 3.6e6) # [$/J]
+
+        self.reliability = kwargs.get('reliability', 1)
+
+        self.ports = kwargs.get('ports', node.get('n_dcfc', 1))
 
         self.usable_ports = sum(
             [self.rng.random() < self.reliability for idx in range(self.ports)]
             )
 
-        self.setup_time = kwargs.get(
-            'setup_time', lambda n, rng: 0
-            )(node, self.rng) # [s]
+        self.setup_time = kwargs.get('setup_time', 0) # [s]
 
         self.queue_kw = kwargs.get('queue', {})
         
         self.vehicle = None
         self.delay_time = None
-        self.risk_attitude = None
         self.delay_time_expected = None
-
-    def expect(self):
-
-        if self.risk_attitude != self.vehicle.risk_attitude:
-
-            self.risk_attitude = self.vehicle.risk_attitude
-
-            
 
     def estimate(self):
 
-        if self.type == 'dc':
+        if self.access == 'public':
 
             if self.usable_ports > 0:
 
                 rho = np.linspace(*self.vehicle.risk_attitude, 100)
 
                 self.queue_time = queuing_time_distribution(
-                    self.usable_ports, rho, **self.queue_kw,
+                    self.usable_ports, rho, self.power, **self.queue_kw,
                     ).rvs(size = self.cases, random_state = self.rng)
+
+                if self.usable_ports != self.ports:
+
+                    self.queue_time_nominal = queuing_time_distribution(
+                        self.ports, rho, self.power, **self.queue_kw,
+                        ).rvs(size = self.cases, random_state = self.rng)
+                else:
+
+                    self.queue_time_nominal = self.queue_time
 
             else:
 
                 self.queue_time = np.inf
+                self.queue_time_nominal = np.inf
 
         else:
 
             self.queue_time = 0
+            self.queue_time_nominal = 0
 
         self.delay_time = np.zeros(self.cases) + self.queue_time + self.setup_time
         self.delay_time_expected = np.median(self.delay_time)
+
+        self.delay_time_nominal = (
+            np.zeros(self.cases) + self.queue_time_nominal + self.setup_time
+            )
+        self.delay_time_nominal_expected = np.median(self.delay_time_nominal)
 
     def update(self, vehicle, edge):
 
@@ -612,10 +688,12 @@ class Station():
         if self.vehicle.cases == 1:
 
             delay_time = self.delay_time_expected
+            delay_time_nominal = self.delay_time_nominal_expected
 
         else:
 
             delay_time = self.delay_time
+            delay_time_nominal = self.delay_time_nominal
         
         feasible, charge_energy, charge_duration = self.vehicle.energy(self, edge)
 
@@ -624,9 +702,13 @@ class Station():
             charge_duration = 0
             delay_time = 0
 
+        # print(delay_time, delay_time_nominal)
+
         edge['feasible'] = feasible
         edge['energy'] = charge_energy
-        edge['charge_time'] = charge_duration
+        edge['charging_time'] = charge_duration
+        edge['delay_time'] = delay_time
         edge['total_time'] = edge['time'] + delay_time + charge_duration
+        edge['routing_time'] = edge['time'] + delay_time_nominal + charge_duration
 
         return edge

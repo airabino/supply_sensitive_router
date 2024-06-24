@@ -9,6 +9,6 @@ from . import dijkstra # Dijkstra's routing algorithm
 from . import bellman # Bellman's routing algorithm
 from . import routing # Routing objects
 from . import rng # Creation of randomly generated objects
-# from . import experiments # Setting up and rnning experimental cases
-# from . import analysis
+from . import experiments # Setting up and rnning experimental cases
+from . import analysis
 from . import queuing

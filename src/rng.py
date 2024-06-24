@@ -88,7 +88,7 @@ def random_completely_connected_graph(n, m, **kwargs):
 			'distance': 0,
 			'time': 0,
 			'price': 0,
-			'type': 'destination',
+			'type': 'place',
 		})
 
 	for idx in range(n, n_nodes):

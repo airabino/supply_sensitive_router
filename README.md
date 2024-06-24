@@ -1,2 +1,12 @@
-# supply_sensitive_router
-#Flexible implementation of Dijkstra/Bellman routing for vehicles with significant supply concerns such as EVs and AFVs. Implemented in Python using only publicly available data.
+Repository for long-trip accessibility
+
+Order of operations:
+
+1. Run either make_data_structure.sh or make_data_structure.py
+	requires modifying keys.txt
+
+2. Make_Empty_Graph.ipynb
+
+3. Add_Adjacency.ipynb
+
+4. Either Random.ipynb or California.ipynb

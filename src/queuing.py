@@ -220,13 +220,15 @@ def mmc_queue(arrival_rate, service_rate, servicers, max_time = np.inf):
 
     return min([np.nanmax([waiting_time, 0]), max_time])
 
-def queuing_time_distribution(n, rho, **kwargs):
+def queuing_time_distribution(n, rho, power, **kwargs):
 
     rho = rho[rho <= .99]
 
-    service_rate_distribution = kwargs.get(
-        'service_rate_distribution',
-        lambda rho: 1 / (np.clip(norm(45, 15).ppf(rho), 0, np.inf) / 80 * 3600)
+    service_mu = kwargs.get('service_mu', 30 * 60)
+    service_sigma = kwargs.get('service_sigma', 10 * 60)
+
+    service_rate_distribution = (
+        lambda rho: 1 / np.clip(norm(service_mu, service_sigma).ppf(rho), 1, np.inf)
         )
 
     service_rate = service_rate_distribution(rho)
@@ -243,12 +245,12 @@ def queuing_time_distribution(n, rho, **kwargs):
             max_time = kwargs.get('max_time', np.inf),
         )
 
-    # print(len(rho))
+    # print(n, max(waiting_time))
 
     dist = rv_histogram(
         np.histogram(
             waiting_time, **kwargs.get(
-                'histogram', {'bins': np.arange(0, max(waiting_time) + 60, 60)}
+                'histogram', {'bins': np.arange(0, max([max(waiting_time), 60]) + 60, 60)}
                 )
             )
         )
