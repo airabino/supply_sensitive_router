@@ -6,7 +6,7 @@ from scipy.stats import norm
 from scipy.special import factorial
 
 from .progress_bar import ProgressBar
-from .dijkstra import dijkstra, multi_directional_dijkstra
+from .dijkstra import dijkstra
 from .bellman import bellman
 from .queuing import queuing_time_distribution
 
@@ -123,43 +123,32 @@ def all_pairs_shortest_paths(graph, origins, method = 'dijkstra', **kwargs):
     the values argument and a boolean savings.
     '''
 
-    # print(origins)
-    # print(kwargs.get('progress_bar_kw', {}))
+    if method == 'dijkstra':
 
-    # print(graph.nodes)
+        routing_function = dijkstra
 
-    if method == 'multi_dijkstra':
+    elif method == 'bellman':
 
-        return multi_directional_dijkstra(graph, origins, **kwargs)
+        routing_function = bellman
 
-    else:
+    costs = {}
+    values = {}
+    paths = {}
 
-        if method == 'dijkstra':
+    for origin in ProgressBar(origins, **kwargs.get('progress_bar_kw', {})):
 
-            routing_function = dijkstra
+        result = shortest_paths(
+            graph, [origin],
+            destinations = origins,
+            method = method, 
+            **kwargs
+            )
 
-        elif method == 'bellman':
+        costs[origin] = result[0]
+        values[origin] = result[1]
+        paths[origin] = result[2]
 
-            routing_function = bellman
-
-        costs = {}
-        values = {}
-        paths = {}
-
-        for origin in ProgressBar(origins, **kwargs.get('progress_bar_kw', {})):
-
-            result = shortest_paths(
-                graph, [origin],
-                destinations = origins,
-                method = method, 
-                **kwargs
-                )
-
-            costs[origin] = result[0]
-            values[origin] = result[1]
-            paths[origin] = result[2]
-
-        return costs, values, paths
+    return costs, values, paths
 
 def gravity(values, origins = {}, destinations = {}, **kwargs):
 
@@ -259,52 +248,13 @@ def specific_impedance(values, destinations = {}, **kwargs):
 
     return sum_cost / n
 
-def current(values, origins = {}, destinations = {}, **kwargs):
-
-    field = kwargs.get('field', 'time')
-    expectation = kwargs.get('expectation', np.mean)
-    constant = kwargs.get('constant', 1)
-
-
-    if not origins:
-
-        origins = {k: 1 for k in values.keys()}
-
-    if not destinations:
-
-        destinations = {k: 1 for k in values.keys()}
-
-    sum_cost = 0
-
-    n = 0
-
-    total_weight = sum([v for v in origins.values()])
-
-    for origin, weight_o in origins.items():
-
-        for destination, weight_d in destinations.items():
-
-            if origin != destination:
-
-                # print(constant * (voltage_d - voltage_o) )
-
-                sum_cost += (
-                    constant * weight_o * weight_d /
-                    expectation(
-                        np.atleast_1d(values[destination][origin][field]) * total_weight
-                        )
-                    )
-
-            n += 1
-
-    return sum_cost / n
-
 class Objective():
 
-    def __init__(self, field = 'weight', limit = np.inf):
+    def __init__(self, field = 'weight', edge_limit = np.inf, path_limit = np.inf):
 
         self.field = field
-        self.limit = limit
+        self.edge_limit = edge_limit
+        self.path_limit = path_limit
 
     def initial(self):
 
@@ -314,55 +264,17 @@ class Objective():
 
         return np.inf
 
-    def update(self, values, link, node):
+    def update(self, values, link):
 
-        values += link.get(self.field, 1)
+        edge_value = link.get(self.field, 1)
 
-        return values, values <= self.limit
+        values += edge_value
+
+        return values, (values <= self.path_limit) and (edge_value <= self.edge_limit)
 
     def compare(self, values, approximation):
 
         return values, values < approximation
-
-class Scout():
-
-    def __init__(self, **kwargs):
-
-        self.field = kwargs.get('field', 'time')
-        self.limit = kwargs.get('limit', np.inf)
-        self.edge_limit = kwargs.get('edge_limit', np.inf)
-        self.exclude = kwargs.get('exclude', ['city_city'])
-        self.disambiguation = kwargs.get('disambiguation', 0)
-
-    def initial(self):
-
-        return 0
-
-    def infinity(self):
-
-        return np.inf
-
-    def update(self, values, edge, node):
-
-        if (edge['type'] in self.exclude) or (edge[self.field] > self.edge_limit):
-
-            return values, False
-
-        values += edge.get(self.field, 1)
-
-        return values, values <= self.limit
-
-    def combine(self, values_0, values_1):
-
-        return values_0 + values_1
-
-    def compare(self, values, approximation):
-
-        if approximation == np.inf:
-
-            return values, values < approximation
-
-        return values, values * (1 + self.disambiguation) < approximation
 
 def edge_types(graph):
 
